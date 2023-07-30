@@ -17,7 +17,7 @@ import {
   GooglePlaceData,
   GooglePlaceDetail,
 } from 'react-native-google-places-autocomplete';
-import MapView, {Marker, PROVIDER_GOOGLE, LatLng} from 'react-native-maps';
+import MapView, {Marker, PROVIDER_GOOGLE} from 'react-native-maps';
 import Geocoder from 'react-native-geocoding';
 import Geolocation from '@react-native-community/geolocation';
 import MapViewDirections from 'react-native-maps-directions';
@@ -26,34 +26,6 @@ import Sound from 'react-native-sound';
 
 const API_KEY = 'AIzaSyAx2KuYvnKN4fLS0A1IkqFlnBBCDHTmoWc'; // Replace with your Google Maps API key
 Sound.setCategory('Playback');
-const calculateDistanceUsingAPI = async (
-  sourceLatitude: number,
-  sourceLongitude: number,
-  destinationLatitude: number,
-  destinationLongitude: number,
-) => {
-  try {
-    const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${sourceLatitude},${sourceLongitude}&destinations=${destinationLatitude},${destinationLongitude}&key=${API_KEY}`,
-    );
-
-    if (
-      response.data &&
-      response.data.rows.length > 0 &&
-      response.data.rows[0].elements.length > 0 &&
-      response.data.rows[0].elements[0].status === 'OK'
-    ) {
-      const distanceInMeters = response.data.rows[0].elements[0].distance.value;
-      const distanceInKilometers = distanceInMeters / 1000; // Convert meters to kilometers
-      return distanceInKilometers;
-    } else {
-      throw new Error('Error calculating distance.');
-    }
-  } catch (error) {
-    console.error('Error calculating distance:', error);
-    throw error;
-  }
-};
 
 const App = () => {
   const mapRef = useRef<MapView>(null);
@@ -65,16 +37,47 @@ const App = () => {
     latitudeDelta: 25, // Adjust the zoom level as needed
     longitudeDelta: 25,
   };
-  const [currentCoords, setCurrentCoords] = useState<LatLng | null>(region);
+  const [currentCoords, setCurrentCoords] = useState(region);
   const [destinationText, setDestinationText] = useState('');
-  const [destinationCoords, setDestinationCoords] = useState<LatLng | null>(
-    null,
-  );
+  const [isLoading, setisLoading] = useState(false);
+  const [destinationCoords, setDestinationCoords] = useState(null);
   const [distance, setDistance] = useState<number | null>(null);
+  const [desiredDistance, setDesiredDistance] = useState<string>('0');
+  const [alertShown, setAlertShown] = useState<boolean>(false);
   const [alarm, setAlarm] = useState(false);
 
   const ding = useRef<Sound | null>(null);
 
+  const calculateDistanceUsingAPI = async (
+    sourceLatitude: number,
+    sourceLongitude: number,
+    destinationLatitude: number,
+    destinationLongitude: number,
+  ) => {
+    try {
+      setisLoading(true);
+      const response = await axios.get(
+        `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${sourceLatitude},${sourceLongitude}&destinations=${destinationLatitude},${destinationLongitude}&key=${API_KEY}`,
+      );
+
+      if (
+        response.data &&
+        response.data.rows.length > 0 &&
+        response.data.rows[0].elements.length > 0 &&
+        response.data.rows[0].elements[0].status === 'OK'
+      ) {
+        const distanceInMeters =
+          response.data.rows[0].elements[0].distance.value;
+        const distanceInKilometers = distanceInMeters / 1000; // Convert meters to kilometers
+        return distanceInKilometers;
+      } else {
+        throw new Error('Error calculating distance.');
+      }
+    } catch (error) {
+      console.error('Error calculating distance:', error);
+      throw error;
+    }
+  };
   const requestLocationPermission = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -101,43 +104,27 @@ const App = () => {
       position => {
         const currentLongitude = position.coords.longitude;
         const currentLatitude = position.coords.latitude;
-        setCurrentCoords({
-          latitude: currentLatitude,
-          longitude: currentLongitude,
-          latitudeDelta: 0.1,
-          longitudeDelta: 0.1,
+        setCurrentCoords(prev => {
+          return {
+            latitude: currentLatitude,
+            longitude: currentLongitude,
+            latitudeDelta: prev.latitudeDelta,
+            longitudeDelta: prev.longitudeDelta,
+          };
         });
       },
       error => {
         console.warn(error.message);
       },
       {
-        enableHighAccuracy: false,
+        enableHighAccuracy: true,
         maximumAge: 1000,
       },
     );
 
     // Set up interval to update current location every 10 seconds
     const intervalId = setInterval(() => {
-      Geolocation.getCurrentPosition(
-        position => {
-          const currentLongitude = position.coords.longitude;
-          const currentLatitude = position.coords.latitude;
-          setCurrentCoords({
-            latitude: currentLatitude,
-            longitude: currentLongitude,
-            latitudeDelta: 0.1,
-            longitudeDelta: 0.1,
-          });
-        },
-        error => {
-          console.warn(error.message);
-        },
-        {
-          enableHighAccuracy: false,
-          maximumAge: 1000,
-        },
-      );
+      subscribeLocationLocation();
     }, 10000);
 
     // Clear the interval when component unmounts
@@ -166,7 +153,21 @@ const App = () => {
       },
     );
   };
-  const handlealarmoff = () => {
+
+  const handleDesiredDistanceChange = (text: string) => {
+    setDesiredDistance(text);
+  };
+
+  const handleSetDesiredDistance = () => {
+    if (!Number.isNaN(parseFloat(desiredDistance))) {
+      Alert.alert(
+        'Desired Distance Set',
+        `Alert will trigger when within ${desiredDistance} km from the destination.`,
+      );
+    }
+  };
+
+  const handleAlarmOff = () => {
     ding?.current?.pause();
     setAlarm(true);
   };
@@ -185,7 +186,7 @@ const App = () => {
       });
     }
   };
-
+  const setNewAlarm = () => {};
   const calculateDistance = async () => {
     if (destinationCoords) {
       try {
@@ -195,12 +196,8 @@ const App = () => {
           destinationCoords.latitude,
           destinationCoords.longitude,
         );
+        setisLoading(false);
         setDistance(inkm);
-        // Check if the distance is less than 1 km
-        if (inkm < 2 && !alarm) {
-          // Trigger the alarm and show the notification
-          playAlarm();
-        }
       } catch (error) {
         console.error('Error calculating distance:', error);
         setDistance(null);
@@ -209,8 +206,6 @@ const App = () => {
   };
 
   useEffect(() => {
-    // Initialize the Sound instance only once
-
     ding.current = new Sound('alarm.mp3', Sound.MAIN_BUNDLE, error => {
       if (error) {
         console.log('failed to load the sound', error);
@@ -225,7 +220,6 @@ const App = () => {
       );
     });
 
-    // Clear the interval when component unmounts
     return () => {
       if (ding.current) {
         ding.current.release();
@@ -235,13 +229,22 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    // Periodically update the distance every 10 seconds
     const intervalId = setInterval(calculateDistance, 10000);
+
+    if (distance !== null && !alertShown) {
+      const desiredDistanceNum = parseFloat(desiredDistance);
+      const distanceNum = parseFloat(distance.toString());
+      if (desiredDistanceNum > 0 && distanceNum < desiredDistanceNum) {
+        setAlertShown(true);
+        playAlarm();
+        Alert.alert('Alert', 'You are within the desired distance.');
+      }
+    }
 
     return () => {
       clearInterval(intervalId);
     };
-  }, [currentCoords, destinationCoords]);
+  }, [currentCoords, destinationCoords, distance, desiredDistance, alertShown]);
 
   const handleSearch = async (destinationTexts: string) => {
     if (destinationTexts.trim() !== '') {
@@ -256,6 +259,7 @@ const App = () => {
             longitudeDelta: 2,
           });
           setAlarm(false);
+          setAlertShown(false);
           if (mapRef.current) {
             mapRef.current.animateToRegion({
               latitude: lat,
@@ -304,12 +308,24 @@ const App = () => {
         </TouchableOpacity>
         <View style={styles.card}>
           <Text>Start</Text>
-          <TextInput>Meters</TextInput>
+          <TextInput
+            value={desiredDistance}
+            onChangeText={handleDesiredDistanceChange}
+            keyboardType="numeric"
+            placeholder="Desired Distance (km)"
+          />
           <Text> {currentCoords?.latitude} </Text>
-          {distance !== null && (
-            <Text>Distance to Destination: {distance} kilometers</Text>
-          )}
-          <Button title="Right button" onPress={() => handlealarmoff()} />
+          {distance !== null &&
+            (isLoading ? (
+              <Text> calculating distance </Text>
+            ) : (
+              <Text>{distance} </Text>
+            ))}
+          <Button
+            title="Set Desired Distance"
+            onPress={handleSetDesiredDistance}
+          />
+          <Button title="Turn Off Alarm" onPress={handleAlarmOff} />
         </View>
         <MapView
           ref={mapRef}
@@ -352,9 +368,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  whiteText: {
-    color: 'red',
-  },
   currentLocation: {
     color: '#037ffc',
   },
@@ -387,10 +400,7 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     elevation: 3,
     padding: 5,
-    zIndex: 1, // Ensure that the searchBox remains above the map
-  },
-  searchInput: {
-    color: 'black',
+    zIndex: 1,
   },
   card: {
     height: '20%',
@@ -398,6 +408,8 @@ const styles = StyleSheet.create({
     zIndex: 100,
     position: 'absolute',
     bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#f2f0f0',
     borderTopRightRadius: 30,
     borderTopLeftRadius: 30,
