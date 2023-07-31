@@ -24,7 +24,7 @@ import MapViewDirections from 'react-native-maps-directions';
 import axios from 'axios';
 import Sound from 'react-native-sound';
 
-const API_KEY = 'AIzaSyAx2KuYvnKN4fLS0A1IkqFlnBBCDHTmoWc'; // Replace with your Google Maps API key
+const API_KEY = 'AIzaSyAx2KuYvnKN4fLS0A1IkqFlnBBCDHTmoWc';
 Sound.setCategory('Playback');
 
 const App = () => {
@@ -43,7 +43,7 @@ const App = () => {
   const [destinationCoords, setDestinationCoords] = useState(null);
   const [distance, setDistance] = useState<number | null>(null);
   const [desiredDistance, setDesiredDistance] = useState<string>('0');
-  const [alertShown, setAlertShown] = useState<boolean>(false);
+  const [isAlertShown, setIsAlertShown] = useState<boolean>(false);
   const [alarm, setAlarm] = useState(false);
 
   const ding = useRef<Sound | null>(null);
@@ -56,6 +56,7 @@ const App = () => {
   ) => {
     try {
       setisLoading(true);
+      console.log('fetch distance');
       const response = await axios.get(
         `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${sourceLatitude},${sourceLongitude}&destinations=${destinationLatitude},${destinationLongitude}&key=${API_KEY}`,
       );
@@ -78,6 +79,7 @@ const App = () => {
       throw error;
     }
   };
+
   const requestLocationPermission = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -104,14 +106,11 @@ const App = () => {
       position => {
         const currentLongitude = position.coords.longitude;
         const currentLatitude = position.coords.latitude;
-        setCurrentCoords(prev => {
-          return {
-            latitude: currentLatitude,
-            longitude: currentLongitude,
-            latitudeDelta: prev.latitudeDelta,
-            longitudeDelta: prev.longitudeDelta,
-          };
-        });
+        setCurrentCoords(prev => ({
+          ...prev,
+          latitude: currentLatitude,
+          longitude: currentLongitude,
+        }));
       },
       error => {
         console.warn(error.message);
@@ -124,7 +123,24 @@ const App = () => {
 
     // Set up interval to update current location every 10 seconds
     const intervalId = setInterval(() => {
-      subscribeLocationLocation();
+      Geolocation.getCurrentPosition(
+        position => {
+          const currentLongitude = position.coords.longitude;
+          const currentLatitude = position.coords.latitude;
+          setCurrentCoords(prev => ({
+            ...prev,
+            latitude: currentLatitude,
+            longitude: currentLongitude,
+          }));
+        },
+        error => {
+          console.warn(error.message);
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 1000,
+        },
+      );
     }, 10000);
 
     // Clear the interval when component unmounts
@@ -165,6 +181,8 @@ const App = () => {
         `Alert will trigger when within ${desiredDistance} km from the destination.`,
       );
     }
+    setIsAlertShown(false);
+    setAlarm(false);
   };
 
   const handleAlarmOff = () => {
@@ -186,9 +204,10 @@ const App = () => {
       });
     }
   };
-  const setNewAlarm = () => {};
+
   const calculateDistance = async () => {
     if (destinationCoords) {
+      console.log('calculation distance');
       try {
         const inkm = await calculateDistanceUsingAPI(
           currentCoords?.latitude!,
@@ -229,27 +248,33 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    const intervalId = setInterval(calculateDistance, 10000);
+    calculateDistance();
 
-    if (distance !== null && !alertShown) {
-      const desiredDistanceNum = parseFloat(desiredDistance);
-      const distanceNum = parseFloat(distance.toString());
-      if (desiredDistanceNum > 0 && distanceNum < desiredDistanceNum) {
-        setAlertShown(true);
-        playAlarm();
-        Alert.alert('Alert', 'You are within the desired distance.');
-      }
+    // Add a condition to check if distance is within the desiredDistance and if the alert has not been shown yet
+    if (
+      !isAlertShown &&
+      distance !== null &&
+      parseFloat(desiredDistance) > 0 &&
+      parseFloat(distance.toString()) < parseFloat(desiredDistance)
+    ) {
+      setIsAlertShown(true); // Set the alertShown state to true so that the alert won't show multiple times
+      setAlarm(false); // Reset the alarm state
+      playAlarm(); // Play the alarm sound
+      Alert.alert('Alert', 'You are within the desired distance.');
     }
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [currentCoords, destinationCoords, distance, desiredDistance, alertShown]);
+  }, [
+    currentCoords,
+    destinationCoords,
+    distance,
+    desiredDistance,
+    isAlertShown,
+  ]);
 
   const handleSearch = async (destinationTexts: string) => {
     if (destinationTexts.trim() !== '') {
       try {
         const response = await Geocoder.from(destinationTexts);
+
         if (response && response.results.length > 0) {
           const {lat, lng} = response.results[0].geometry.location;
           setDestinationCoords({
@@ -258,8 +283,7 @@ const App = () => {
             latitudeDelta: 2,
             longitudeDelta: 2,
           });
-          setAlarm(false);
-          setAlertShown(false);
+
           if (mapRef.current) {
             mapRef.current.animateToRegion({
               latitude: lat,
@@ -307,7 +331,6 @@ const App = () => {
           />
         </TouchableOpacity>
         <View style={styles.card}>
-          <Text>Start</Text>
           <TextInput
             value={desiredDistance}
             onChangeText={handleDesiredDistanceChange}
@@ -332,7 +355,7 @@ const App = () => {
           style={styles.map}
           provider={PROVIDER_GOOGLE}
           region={currentCoords}>
-          {currentCoords !== null && (
+          {currentCoords !== region && (
             <Marker
               coordinate={{
                 latitude: currentCoords.latitude,
